@@ -1,0 +1,101 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String?
+  role      UserRole @default(ANALYST)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  sites Site[]
+  
+  @@map("users")
+}
+
+model Site {
+  id        String   @id @default(uuid())
+  websiteId String   @unique // Public website ID for tracking script
+  domain    String
+  name      String
+  timezone  String   @default("UTC")
+  public    Boolean  @default(false)
+  shareId   String?  @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  events Event[]
+  goals  Goal[]
+  
+  @@map("sites")
+}
+
+model Event {
+  id         String    @id @default(uuid())
+  siteId     String
+  sessionId  String
+  visitorId  String
+  type       EventType
+  name       String
+  url        String
+  referrer   String?
+  properties String?   // JSON string
+  revenue    Float?
+  currency   String?
+  timestamp  DateTime  @default(now())
+  
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  
+  @@map("events")
+}
+
+model Goal {
+  id          String   @id @default(uuid())
+  siteId      String
+  name        String
+  description String?
+  type        GoalType
+  value       String   // URL pattern or event name
+  revenue     Float?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  
+  @@map("goals")
+}
+
+// Enums
+enum UserRole {
+  OWNER
+  ADMIN
+  ANALYST
+  VIEWER
+}
+
+enum EventType {
+  PAGEVIEW
+  CUSTOM
+  REVENUE
+  OUTBOUND
+  DOWNLOAD
+}
+
+enum GoalType {
+  PAGE_VIEW
+  CUSTOM_EVENT
+  REVENUE
+} 
