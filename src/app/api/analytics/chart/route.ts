@@ -1,17 +1,12 @@
 import { NextResponse } from 'next/server'
-import { getChartData, seedSampleData } from '@/lib/analytics'
+import { getChartData } from '@/lib/analytics'
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
-    const mode = searchParams.get('mode')
+    const siteId = searchParams.get('siteId')
     
-    // Only seed if not in real mode
-    if (mode !== 'real') {
-      await seedSampleData()
-    }
-    
-    const chartData = await getChartData()
+    const chartData = await getChartData(siteId || undefined)
     return NextResponse.json(chartData)
   } catch (error) {
     console.error('Failed to fetch chart data:', error)

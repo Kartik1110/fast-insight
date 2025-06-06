@@ -1,4 +1,4 @@
-import { PrismaClient, EventType } from '@prisma/client'
+import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
 
@@ -45,6 +45,8 @@ export async function getAnalyticsMetrics(siteId?: string): Promise<AnalyticsMet
     }
   })
   
+  console.log(`📊 Current period: ${currentEvents.length} events, Previous period: ${previousEvents.length} events`)
+  
   // Calculate metrics
   const currentVisitors = new Set(currentEvents.map(e => e.visitorId)).size
   const previousVisitors = new Set(previousEvents.map(e => e.visitorId)).size
@@ -73,8 +75,13 @@ export async function getAnalyticsMetrics(siteId?: string): Promise<AnalyticsMet
   const bounceRateChange = calculateChange(currentBounceRate, previousBounceRate)
   
   // Calculate average session duration (simplified)
-  const avgSessionDuration = 245 // Mock for now
+  const avgSessionDuration = calculateAverageSessionDuration(currentEvents)
+  const previousAvgSessionDuration = calculateAverageSessionDuration(previousEvents)
+  const avgSessionDurationChange = calculateChange(avgSessionDuration, previousAvgSessionDuration)
+  
   const conversionRate = currentVisitors > 0 ? (currentEvents.filter(e => e.revenue && e.revenue > 0).length / currentVisitors) : 0
+  const previousConversionRate = previousVisitors > 0 ? (previousEvents.filter(e => e.revenue && e.revenue > 0).length / previousVisitors) : 0
+  const conversionRateChange = calculateChange(conversionRate, previousConversionRate)
   
   return {
     visitors: { 
@@ -99,13 +106,13 @@ export async function getAnalyticsMetrics(siteId?: string): Promise<AnalyticsMet
     },
     avgSessionDuration: { 
       value: avgSessionDuration, 
-      change: 5.2, 
-      trend: 'up' 
+      change: avgSessionDurationChange, 
+      trend: avgSessionDurationChange >= 0 ? 'up' : 'down' 
     },
     conversionRate: { 
       value: conversionRate, 
-      change: 2.1, 
-      trend: 'up' 
+      change: conversionRateChange, 
+      trend: conversionRateChange >= 0 ? 'up' : 'down' 
     }
   }
 }
@@ -203,16 +210,50 @@ function categorizeReferrer(referrer: string | null): string {
   return 'Referral'
 }
 
-// Seed some sample data for testing
-export async function seedSampleData() {
-  // Check if we already have data
-  const existingEvents = await prisma.event.count()
-  if (existingEvents > 0) {
-    console.log(`📊 Database already has ${existingEvents} events, skipping seed`)
-    return
-  }
+function calculateAverageSessionDuration(events: { type: string; sessionId: string; timestamp: Date }[]): number {
+  const sessions = groupBy(events.filter(e => e.type === 'PAGEVIEW'), 'sessionId')
+  let totalDuration = 0
+  let sessionCount = 0
   
-  // Check if user already exists
+  Object.values(sessions).forEach(sessionEvents => {
+    if (sessionEvents.length > 1) {
+      const sortedEvents = sessionEvents.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+      const duration = new Date(sortedEvents[sortedEvents.length - 1].timestamp).getTime() - new Date(sortedEvents[0].timestamp).getTime()
+      totalDuration += duration / 1000 // Convert to seconds
+      sessionCount++
+    }
+  })
+  
+  return sessionCount > 0 ? totalDuration / sessionCount : 0
+}
+
+// Get real site data for dashboard
+export async function getRealSites() {
+  return await prisma.site.findMany({
+    include: {
+      _count: {
+        select: { events: true }
+      }
+    }
+  })
+}
+
+// Create a new site
+export async function createSite(data: { domain: string; name: string; userId: string }) {
+  const websiteId = `fi_${Math.random().toString(36).substring(2, 15)}`
+  
+  return await prisma.site.create({
+    data: {
+      websiteId,
+      domain: data.domain,
+      name: data.name,
+      userId: data.userId
+    }
+  })
+}
+
+// Get or create demo user
+export async function getOrCreateDemoUser() {
   let user = await prisma.user.findUnique({
     where: { email: 'demo@fastinsight.com' }
   })
@@ -227,201 +268,5 @@ export async function seedSampleData() {
     })
   }
   
-  // Check if site already exists
-  let site = await prisma.site.findUnique({
-    where: { websiteId: 'fi_684301d51cba1db8fd23052a' }
-  })
-  
-  if (!site) {
-    site = await prisma.site.create({
-      data: {
-        websiteId: 'fi_684301d51cba1db8fd23052a',
-        domain: 'mywebsite.com',
-        name: 'My Website',
-        userId: user.id
-      }
-    })
-  }
-  
-  // Generate sample events for the last 14 days (so we have comparison data)
-  const now = new Date()
-  const sampleEvents = []
-  
-  for (let day = 13; day >= 0; day--) {
-    const date = new Date(now.getTime() - day * 24 * 60 * 60 * 1000)
-    const eventsPerDay = Math.floor(Math.random() * 30) + 5 // Fewer events to not overwhelm real data
-    
-    for (let i = 0; i < eventsPerDay; i++) {
-      const visitorId = `visitor_${Math.floor(Math.random() * 15) + 1}`
-      const sessionId = `session_${visitorId}_${day}`
-      
-      // Pageview event
-      sampleEvents.push({
-        siteId: site.id,
-        sessionId,
-        visitorId,
-        type: 'PAGEVIEW',
-        name: 'pageview',
-        url: `https://mywebsite.com${['/', '/about', '/pricing', '/contact'][Math.floor(Math.random() * 4)]}`,
-        referrer: [null, 'https://google.com', 'https://facebook.com', 'https://twitter.com'][Math.floor(Math.random() * 4)],
-        timestamp: new Date(date.getTime() + Math.random() * 24 * 60 * 60 * 1000)
-      })
-      
-      // Random custom events
-      if (Math.random() < 0.2) {
-        sampleEvents.push({
-          siteId: site.id,
-          sessionId,
-          visitorId,
-          type: 'CUSTOM',
-          name: ['signup', 'download', 'contact'][Math.floor(Math.random() * 3)],
-          url: 'https://mywebsite.com',
-          timestamp: new Date(date.getTime() + Math.random() * 24 * 60 * 60 * 1000)
-        })
-      }
-      
-      // Random revenue events
-      if (Math.random() < 0.03) {
-        sampleEvents.push({
-          siteId: site.id,
-          sessionId,
-          visitorId,
-          type: 'REVENUE',
-          name: 'purchase',
-          url: 'https://mywebsite.com/checkout',
-          revenue: [9.99, 29.99, 99.99][Math.floor(Math.random() * 3)],
-          currency: 'USD',
-          timestamp: new Date(date.getTime() + Math.random() * 24 * 60 * 60 * 1000)
-        })
-      }
-    }
-  }
-  
-  // Insert all events
-  for (const event of sampleEvents) {
-    await prisma.event.create({ 
-      data: {
-        siteId: event.siteId,
-        sessionId: event.sessionId,
-        visitorId: event.visitorId,
-        type: event.type as EventType,
-        name: event.name,
-        url: event.url,
-        referrer: event.referrer || null,
-        revenue: event.revenue || null,
-        currency: event.currency || null,
-        timestamp: event.timestamp
-      }
-    })
-  }
-  
-  console.log(`✅ Seeded ${sampleEvents.length} sample events`)
-}
-
-// Clear sample data to get real analytics
-export async function clearSampleData() {
-  try {
-    // Delete all events from the sample site
-    const sampleSite = await prisma.site.findUnique({
-      where: { websiteId: 'fi_684301d51cba1db8fd23052a' }
-    })
-    
-    if (sampleSite) {
-      const deletedEvents = await prisma.event.deleteMany({
-        where: { siteId: sampleSite.id }
-      })
-      console.log(`🗑️  Cleared ${deletedEvents.count} sample events`)
-    }
-  } catch (error) {
-    console.error('Failed to clear sample data:', error)
-  }
-}
-
-// Get real analytics without seeding
-export async function getRealAnalyticsMetrics(siteId?: string): Promise<AnalyticsMetrics> {
-  const now = new Date()
-  const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-  const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
-  
-  // Get current period data (last 7 days)
-  const currentEvents = await prisma.event.findMany({
-    where: {
-      timestamp: { gte: lastWeek },
-      ...(siteId && { siteId })
-    }
-  })
-  
-  // Get previous period data (7-14 days ago)
-  const previousEvents = await prisma.event.findMany({
-    where: {
-      timestamp: { gte: twoWeeksAgo, lt: lastWeek },
-      ...(siteId && { siteId })
-    }
-  })
-  
-  console.log(`📊 Current period: ${currentEvents.length} events, Previous period: ${previousEvents.length} events`)
-  
-  // Calculate metrics
-  const currentVisitors = new Set(currentEvents.map(e => e.visitorId)).size
-  const previousVisitors = new Set(previousEvents.map(e => e.visitorId)).size
-  const visitorsChange = calculateChange(currentVisitors, previousVisitors)
-  
-  const currentPageviews = currentEvents.filter(e => e.type === 'PAGEVIEW').length
-  const previousPageviews = previousEvents.filter(e => e.type === 'PAGEVIEW').length
-  const pageviewsChange = calculateChange(currentPageviews, previousPageviews)
-  
-  const currentRevenue = currentEvents
-    .filter(e => e.revenue && e.revenue > 0)
-    .reduce((sum, e) => sum + (e.revenue || 0), 0)
-  const previousRevenue = previousEvents
-    .filter(e => e.revenue && e.revenue > 0)
-    .reduce((sum, e) => sum + (e.revenue || 0), 0)
-  const revenueChange = calculateChange(currentRevenue, previousRevenue)
-  
-  // Calculate bounce rate (simplified: sessions with only 1 pageview)
-  const currentSessions = groupBy(currentEvents.filter(e => e.type === 'PAGEVIEW'), 'sessionId')
-  const currentBounces = Object.values(currentSessions).filter(events => events.length === 1).length
-  const currentBounceRate = Object.keys(currentSessions).length > 0 ? currentBounces / Object.keys(currentSessions).length : 0
-  
-  const previousSessions = groupBy(previousEvents.filter(e => e.type === 'PAGEVIEW'), 'sessionId')
-  const previousBounces = Object.values(previousSessions).filter(events => events.length === 1).length
-  const previousBounceRate = Object.keys(previousSessions).length > 0 ? previousBounces / Object.keys(previousSessions).length : 0
-  const bounceRateChange = calculateChange(currentBounceRate, previousBounceRate)
-  
-  // Calculate average session duration (simplified)
-  const avgSessionDuration = 245 // Mock for now
-  const conversionRate = currentVisitors > 0 ? (currentEvents.filter(e => e.revenue && e.revenue > 0).length / currentVisitors) : 0
-  
-  return {
-    visitors: { 
-      value: currentVisitors, 
-      change: visitorsChange, 
-      trend: visitorsChange >= 0 ? 'up' : 'down' 
-    },
-    pageviews: { 
-      value: currentPageviews, 
-      change: pageviewsChange, 
-      trend: pageviewsChange >= 0 ? 'up' : 'down' 
-    },
-    bounceRate: { 
-      value: currentBounceRate, 
-      change: bounceRateChange, 
-      trend: bounceRateChange <= 0 ? 'up' : 'down' // Lower bounce rate is better
-    },
-    revenue: { 
-      value: currentRevenue, 
-      change: revenueChange, 
-      trend: revenueChange >= 0 ? 'up' : 'down' 
-    },
-    avgSessionDuration: { 
-      value: avgSessionDuration, 
-      change: 5.2, 
-      trend: 'up' 
-    },
-    conversionRate: { 
-      value: conversionRate, 
-      change: 2.1, 
-      trend: 'up' 
-    }
-  }
+  return user
 } 

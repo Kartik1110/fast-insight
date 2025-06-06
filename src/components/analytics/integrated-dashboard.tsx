@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, CartesianGrid, Tooltip } from 'recharts'
-import { ChevronLeft, ChevronRight, Globe, AlertTriangle, TrendingUp, TrendingDown, Users, Eye, DollarSign, Target, Clock, Zap, Bell, BarChart } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Globe, AlertTriangle, TrendingUp, TrendingDown, Users, Eye, DollarSign, Target, Clock, Zap, Bell, BarChart, Plus } from 'lucide-react'
 import { AnalyticsMetrics, ChartData, TrafficSource } from '@/lib/analytics'
 
 // Color palette for charts
@@ -19,6 +19,14 @@ interface PageAnalytics {
   visitors: number
   bounceRate: number
   avgTimeOnPage: number
+}
+
+interface Site {
+  id: string
+  websiteId: string
+  domain: string
+  name: string
+  _count: { events: number }
 }
 
 interface MetricCardProps {
@@ -147,21 +155,52 @@ export function IntegratedDashboard() {
   const [chartData, setChartData] = useState<ChartData[]>([])
   const [trafficSources, setTrafficSources] = useState<TrafficSource[]>([])
   const [pageAnalytics, setPageAnalytics] = useState<PageAnalytics[]>([])
+  const [sites, setSites] = useState<Site[]>([])
   const [loading, setLoading] = useState(true)
-  const [selectedSite, setSelectedSite] = useState('colabtech.co')
-  const [selectedPeriod, setSelectedPeriod] = useState('today')
+  const [selectedSite, setSelectedSite] = useState<string>('')
+  const [selectedPeriod, setSelectedPeriod] = useState('7d')
+  const [mounted, setMounted] = useState(false)
+
+  // Handle client-side mounting
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  // Fetch sites on mount
+  useEffect(() => {
+    if (!mounted) return
+    
+    async function fetchSites() {
+      try {
+        const response = await fetch('/api/sites')
+        if (response.ok) {
+          const sitesData = await response.json()
+          setSites(sitesData)
+          if (sitesData.length > 0 && !selectedSite) {
+            setSelectedSite(sitesData[0].id)
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch sites:', error)
+      }
+    }
+    
+    fetchSites()
+  }, [mounted, selectedSite])
 
   useEffect(() => {
+    if (!mounted || !selectedSite) return
+    
     async function fetchData() {
       setLoading(true)
       try {
-        console.log('🔄 Fetching integrated analytics data...')
+        console.log('🔄 Fetching analytics data for site:', selectedSite)
         
         // Fetch data from all APIs
         const [metricsRes, chartRes, trafficRes, pagesRes] = await Promise.all([
-          fetch('/api/analytics/metrics?mode=sample'),
-          fetch('/api/analytics/chart?mode=sample'),
-          fetch('/api/analytics/traffic-sources?mode=sample'),
+          fetch(`/api/analytics/metrics?siteId=${selectedSite}`),
+          fetch(`/api/analytics/chart?siteId=${selectedSite}`),
+          fetch(`/api/analytics/traffic-sources?siteId=${selectedSite}`),
           fetch('/api/analytics/pages')
         ])
         
@@ -197,7 +236,7 @@ export function IntegratedDashboard() {
     }
 
     fetchData()
-  }, [selectedSite, selectedPeriod])
+  }, [selectedSite, selectedPeriod, mounted])
 
   // Format chart data for better display
   const formatChartData = (data: ChartData[]) => {
@@ -207,6 +246,19 @@ export function IntegratedDashboard() {
       pageviews: item.pageviews || 0,
       revenue: item.revenue || 0
     }))
+  }
+
+  const selectedSiteData = sites.find(site => site.id === selectedSite)
+  const hasData = metrics && (metrics.visitors.value > 0 || metrics.pageviews.value > 0)
+
+  if (!mounted) {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white">
+        <div className="flex items-center justify-center h-screen">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -227,15 +279,20 @@ export function IntegratedDashboard() {
             <div className="flex items-center space-x-2">
               <Globe className="h-4 w-4 text-gray-400" />
               <Select value={selectedSite} onValueChange={setSelectedSite}>
-                <SelectTrigger className="w-40 bg-gray-700 border-gray-600 text-white">
-                  <SelectValue />
+                <SelectTrigger className="w-48 bg-gray-700 border-gray-600 text-white">
+                  <SelectValue placeholder="Select a site" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="colabtech.co">colabtech.co</SelectItem>
-                  <SelectItem value="example.com">example.com</SelectItem>
-                  <SelectItem value="mysite.dev">mysite.dev</SelectItem>
+                  {sites.map(site => (
+                    <SelectItem key={site.id} value={site.id}>
+                      {site.name} ({site.domain})
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
+              <Button variant="ghost" size="icon" className="text-gray-400 hover:text-white">
+                <Plus className="h-4 w-4" />
+              </Button>
             </div>
             
             {/* Date Selector */}
@@ -278,17 +335,35 @@ export function IntegratedDashboard() {
 
       {/* Main Content */}
       <main className="p-6">
-        {/* Alert Banner - Only show when no data */}
-        {!loading && metrics && metrics.visitors.value === 0 && (
+        {/* Alert Banner - Show when no site selected or no data */}
+        {(!selectedSite || sites.length === 0) && (
+          <div className="bg-gradient-to-r from-blue-900 to-blue-800 border border-blue-600 rounded-lg p-4 mb-6 flex items-start space-x-3">
+            <AlertTriangle className="h-5 w-5 text-blue-400 mt-0.5 flex-shrink-0" />
+            <div>
+              <h3 className="text-blue-100 font-semibold mb-1">No sites configured</h3>
+              <p className="text-blue-200 text-sm">
+                Add your first website to start tracking analytics data.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {selectedSite && !loading && !hasData && (
           <div className="bg-gradient-to-r from-yellow-900 to-yellow-800 border border-yellow-600 rounded-lg p-4 mb-6 flex items-start space-x-3">
             <AlertTriangle className="h-5 w-5 text-yellow-400 mt-0.5 flex-shrink-0" />
             <div>
               <h3 className="text-yellow-100 font-semibold mb-1">Awaiting the first event...</h3>
               <ol className="text-yellow-200 text-sm space-y-1">
-                <li>1. Install the script using <span className="underline cursor-pointer hover:text-yellow-100">the tracking code</span></li>
-                <li>2. Visit {selectedSite} to register the first event yourself</li>
+                <li>1. Install the tracking script on your website</li>
+                <li>2. Visit {selectedSiteData?.domain} to register the first event</li>
                 <li>3. Still not working? <span className="underline cursor-pointer hover:text-yellow-100">Contact support</span></li>
               </ol>
+              {selectedSiteData && (
+                <div className="mt-3 p-3 bg-yellow-800 rounded text-yellow-100 text-sm">
+                  <p className="font-medium mb-1">Tracking Code:</p>
+                  <code className="text-xs">{`<script src="/tracking.js" data-website-id="${selectedSiteData.websiteId}"></script>`}</code>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -329,7 +404,7 @@ export function IntegratedDashboard() {
           />
           <MetricCard
             title="Avg. Session"
-            value={loading ? "—" : `${Math.floor((metrics?.avgSessionDuration.value || 0) / 60)}m ${(metrics?.avgSessionDuration.value || 0) % 60}s`}
+            value={loading ? "—" : `${Math.floor((metrics?.avgSessionDuration.value || 0) / 60)}m ${Math.floor((metrics?.avgSessionDuration.value || 0) % 60)}s`}
             change={metrics?.avgSessionDuration.change}
             trend={metrics?.avgSessionDuration.trend}
             icon={<Clock className="h-4 w-4" />}
@@ -430,12 +505,18 @@ export function IntegratedDashboard() {
                     </div>
                   ) : trafficSources.length > 0 ? (
                     <div className="space-y-3">
-                      {trafficSources.slice(0, 5).map((source) => (
-                        <div key={source.name} className="flex justify-between items-center p-3 bg-gray-750 rounded-lg">
-                          <span className="text-gray-300">{source.name}</span>
+                      {trafficSources.slice(0, 5).map((source, index) => (
+                        <div key={source.name} className="flex items-center justify-between py-2">
+                          <div className="flex items-center space-x-3">
+                            <div 
+                              className="w-3 h-3 rounded-full"
+                              style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}
+                            ></div>
+                            <span className="text-gray-300 text-sm">{source.name}</span>
+                          </div>
                           <div className="text-right">
                             <div className="text-white font-medium">{source.visitors}</div>
-                            <div className="text-gray-400 text-sm">{source.percentage.toFixed(1)}%</div>
+                            <div className="text-gray-400 text-xs">{source.percentage.toFixed(1)}%</div>
                           </div>
                         </div>
                       ))}
@@ -448,12 +529,12 @@ export function IntegratedDashboard() {
                 </TabsContent>
                 <TabsContent value="campaign">
                   <div className="text-center py-8">
-                    <p className="text-gray-400">No campaign data available</p>
+                    <p className="text-gray-400">Campaign tracking coming soon</p>
                   </div>
                 </TabsContent>
                 <TabsContent value="utm">
                   <div className="text-center py-8">
-                    <p className="text-gray-400">No UTM data available</p>
+                    <p className="text-gray-400">UTM tracking coming soon</p>
                   </div>
                 </TabsContent>
               </Tabs>
@@ -463,57 +544,35 @@ export function IntegratedDashboard() {
           {/* Page Analytics */}
           <Card className="bg-gray-800 border-gray-700">
             <CardHeader>
-              <CardTitle className="text-white">Page Analytics</CardTitle>
+              <CardTitle className="text-white">Top Pages</CardTitle>
             </CardHeader>
             <CardContent>
-              <Tabs defaultValue="pages">
-                <TabsList className="bg-gray-700 mb-4">
-                  <TabsTrigger value="pages" className="text-gray-300">Top Pages</TabsTrigger>
-                  <TabsTrigger value="entry" className="text-gray-300">Entry Pages</TabsTrigger>
-                  <TabsTrigger value="exit" className="text-gray-300">Exit Pages</TabsTrigger>
-                </TabsList>
-                <TabsContent value="pages">
-                  {loading ? (
-                    <div className="space-y-3">
-                      {[1, 2, 3].map(i => (
-                        <div key={i} className="h-8 bg-gray-700 rounded animate-pulse"></div>
-                      ))}
+              {loading ? (
+                <div className="space-y-3">
+                  {[1, 2, 3, 4, 5].map(i => (
+                    <div key={i} className="h-8 bg-gray-700 rounded animate-pulse"></div>
+                  ))}
+                </div>
+              ) : pageAnalytics.length > 0 ? (
+                <div className="space-y-3">
+                  {pageAnalytics.slice(0, 5).map((page) => (
+                    <div key={page.path} className="flex items-center justify-between py-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-gray-300 text-sm truncate">{page.path}</div>
+                        <div className="text-gray-500 text-xs">{page.visitors} visitors</div>
+                      </div>
+                      <div className="text-right ml-4">
+                        <div className="text-white font-medium">{page.views}</div>
+                        <div className="text-gray-400 text-xs">views</div>
+                      </div>
                     </div>
-                  ) : pageAnalytics.length > 0 ? (
-                    <div className="space-y-3">
-                      {pageAnalytics.slice(0, 5).map((page) => (
-                        <div key={page.path} className="flex justify-between items-center p-3 bg-gray-750 rounded-lg">
-                          <div className="flex-1">
-                            <span className="text-gray-300 text-sm font-medium">{page.path}</span>
-                            <div className="text-gray-400 text-xs mt-1">
-                              Bounce: {(page.bounceRate * 100).toFixed(1)}% • 
-                              Time: {Math.floor(page.avgTimeOnPage / 60)}m {page.avgTimeOnPage % 60}s
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-white font-medium">{page.views.toLocaleString()}</div>
-                            <div className="text-gray-400 text-sm">{page.visitors} visitors</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-center py-8">
-                      <p className="text-gray-400">No page data available</p>
-                    </div>
-                  )}
-                </TabsContent>
-                <TabsContent value="entry">
-                  <div className="text-center py-8">
-                    <p className="text-gray-400">No entry page data available</p>
-                  </div>
-                </TabsContent>
-                <TabsContent value="exit">
-                  <div className="text-center py-8">
-                    <p className="text-gray-400">No exit page data available</p>
-                  </div>
-                </TabsContent>
-              </Tabs>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <p className="text-gray-400">No page data available</p>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
