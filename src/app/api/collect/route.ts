@@ -1,91 +1,116 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { PrismaClient } from '@prisma/client'
-
-const prisma = new PrismaClient()
+import { supabase } from "@/lib/db";
 
 export async function POST(request: NextRequest) {
   try {
-    const data = await request.json()
-    
-    console.log('📥 Received tracking data:', data)
-    
+    const data = await request.json();
+
+    console.log("📥 Received tracking data:", JSON.stringify(data, null, 2));
+
     // Handle the new tracking script format
-    const websiteId = data.websiteId
-    const visitorId = data.visitorId
-    const sessionId = data.sessionId
-    const eventType = data.type
-    const url = data.url
-    
+    const websiteId = data.websiteId;
+    const visitorId = data.visitorId;
+    const sessionId = data.sessionId;
+    const eventType = data.type;
+    const url = data.url;
+
     // Validate required fields
     if (!websiteId || !visitorId || !eventType) {
-      console.error('❌ Missing required fields:', { websiteId, visitorId, eventType })
+      console.error("❌ Missing required fields:", {
+        websiteId,
+        visitorId,
+        eventType,
+      });
       return NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: "Missing required fields" },
         { status: 400 }
-      )
+      );
     }
 
-    // Find the site by websiteId
-    const site = await prisma.site.findUnique({
-      where: { websiteId: websiteId }
-    })
+    // Find the site by websiteId using Supabase (using snake_case column names)
+    const { data: site, error: siteError } = await supabase
+      .from("sites")
+      .select("*")
+      .eq("website_id", websiteId)
+      .single();
 
-    if (!site) {
-      console.error('❌ Site not found for ID:', websiteId)
-      return NextResponse.json(
-        { error: 'Invalid site ID' },
-        { status: 404 }
-      )
+    if (siteError || !site) {
+      console.error("❌ Site not found for ID:", websiteId, siteError?.message);
+      return NextResponse.json({ error: "Invalid site ID" }, { status: 404 });
     }
 
-    console.log('✅ Found site:', site.name)
+    console.log("✅ Found site:", site.name);
 
     // Map event types to our enum
-    let eventTypeEnum: 'PAGEVIEW' | 'REVENUE' | 'OUTBOUND' | 'DOWNLOAD' | 'CUSTOM' = 'PAGEVIEW'
-    if (eventType === 'pageview') eventTypeEnum = 'PAGEVIEW'
-    else if (eventType === 'revenue' || data.amount) eventTypeEnum = 'REVENUE'
-    else if (eventType === 'outbound') eventTypeEnum = 'OUTBOUND'
-    else if (eventType === 'download') eventTypeEnum = 'DOWNLOAD'
-    else if (eventType === 'custom' || eventType === 'engagement') eventTypeEnum = 'CUSTOM'
-    else eventTypeEnum = 'CUSTOM'
+    let eventTypeEnum:
+      | "PAGEVIEW"
+      | "REVENUE"
+      | "OUTBOUND"
+      | "DOWNLOAD"
+      | "CUSTOM" = "PAGEVIEW";
+    if (eventType === "pageview") eventTypeEnum = "PAGEVIEW";
+    else if (eventType === "revenue" || data.amount) eventTypeEnum = "REVENUE";
+    else if (eventType === "outbound") eventTypeEnum = "OUTBOUND";
+    else if (eventType === "download") eventTypeEnum = "DOWNLOAD";
+    else if (eventType === "custom" || eventType === "engagement")
+      eventTypeEnum = "CUSTOM";
+    else eventTypeEnum = "CUSTOM";
 
     // Extract revenue data
-    const revenue = data.amount || null
-    const currency = data.currency || null
+    const revenue = data.amount || null;
+    const currency = data.currency || null;
 
     // Get properties from the tracking data
     const properties = {
       ...(data.properties || {}),
       viewport: data.viewport,
-      domain: data.domain
-    }
+      domain: data.domain,
+    };
 
-    // Create the event record
-    const event = await prisma.event.create({
-      data: {
-        siteId: site.id,
-        visitorId: visitorId,
-        sessionId: sessionId || visitorId,
+    // Create the event record using Supabase (using snake_case column names)
+    const { data: event, error: eventError } = await supabase
+      .from("events")
+      .insert({
+        site_id: site.id,
+        visitor_id: visitorId,
+        session_id: sessionId || visitorId,
         type: eventTypeEnum,
         name: data.name || eventType,
-        url: url || 'unknown',
+        url: url || "unknown",
         referrer: data.referrer,
         properties: JSON.stringify(properties),
         revenue: revenue ? parseFloat(revenue.toString()) : null,
         currency: currency,
-        timestamp: data.timestamp ? new Date(data.timestamp) : new Date()
-      }
-    })
+        timestamp: data.timestamp
+          ? new Date(data.timestamp).toISOString()
+          : new Date().toISOString(),
+      })
+      .select()
+      .single();
 
-    console.log('✅ Event created:', event.id)
+    if (eventError) {
+      console.error("❌ Failed to create event:", eventError.message);
+      return NextResponse.json(
+        { error: "Failed to create event", details: eventError.message },
+        { status: 500 }
+      );
+    }
 
-    return NextResponse.json({ success: true, eventId: event.id })
+    console.log("✅ Event created successfully:", event.id);
+    console.log("📊 Event details:", {
+      type: eventTypeEnum,
+      url: url,
+      visitor: visitorId,
+      site: site.name,
+    });
+
+    return NextResponse.json({ success: true, eventId: event.id });
   } catch (error) {
-    console.error('❌ Analytics collection error:', error)
+    console.error("❌ Analytics collection error:", error);
     return NextResponse.json(
-      { error: 'Internal server error', details: (error as Error).message },
+      { error: "Internal server error", details: (error as Error).message },
       { status: 500 }
-    )
+    );
   }
 }
 
